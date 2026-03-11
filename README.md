@@ -22,7 +22,18 @@ A common mistake is writing the settings commands to `FFF2` instead of `FFF5` --
 2. Replace `YOUR_IBBQ_MAC_ADDRESS` with your device's MAC address
 3. Adjust the number of probe sensors to match your device (4 for IBT-4XS, 6 for IBT-6XS, etc.)
 
-The key snippets:
+### BLE connection slots
+
+If you're using `bluetooth_proxy` or other BLE components, make sure you have enough connection slots. The iBBQ client needs one slot for itself:
+
+```yaml
+esp32_ble:
+  max_connections: 4
+```
+
+### Connecting and authenticating
+
+On connect, we wait 2s for the BLE stack to be fully ready, then send the three protocol commands in sequence. The delays between writes give the device time to process each command:
 
 ```yaml
 ble_client:
@@ -31,27 +42,50 @@ ble_client:
     on_connect:
       then:
         - delay: 2s
-        # Pairing key to FFF2
+        # Pairing key (15 bytes) to FFF2 (AccountAndVerify)
         - ble_client.ble_write:
             id: ibbq_client
             service_uuid: "FFF0"
             characteristic_uuid: "FFF2"
             value: [0x21, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0xb8, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00]
         - delay: 500ms
-        # Enable realtime data on FFF5
+        # Enable realtime data on FFF5 (SettingsData)
         - ble_client.ble_write:
             id: ibbq_client
             service_uuid: "FFF0"
             characteristic_uuid: "FFF5"
             value: [0x0B, 0x01, 0x00, 0x00, 0x00, 0x00]
         - delay: 500ms
-        # Set units to Celsius on FFF5
+        # Set units to Celsius on FFF5 (SettingsData)
         - ble_client.ble_write:
             id: ibbq_client
             service_uuid: "FFF0"
             characteristic_uuid: "FFF5"
             value: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00]
 ```
+
+### Handling disconnects
+
+When the iBBQ disconnects (e.g. powered off, out of range), all probes are set to NAN so Home Assistant shows them as unavailable. ESPHome's `ble_client` will automatically attempt to reconnect:
+
+```yaml
+    on_disconnect:
+      then:
+        - lambda: |-
+            ESP_LOGD("ibbq", "Disconnected!");
+            id(probe_1).publish_state(NAN);
+            id(probe_2).publish_state(NAN);
+            id(probe_3).publish_state(NAN);
+            id(probe_4).publish_state(NAN);
+            id(probe_5).publish_state(NAN);
+            id(probe_6).publish_state(NAN);
+```
+
+### Receiving temperature data
+
+A `ble_client` sensor subscribes to notifications on `FFF4`. `update_interval: never` is important -- the iBBQ only supports notify, not read, so polling would cause errors.
+
+The lambda parses the notification payload: each probe is 2 bytes little-endian in 0.1°C units. Values >= 60000 (typically `0xFFF6`) mean no probe is connected and are published as NAN. The number of probes is determined dynamically from the payload size, so this works with 4-probe and 6-probe models alike:
 
 ```yaml
 sensor:
@@ -88,12 +122,26 @@ sensor:
       return probes_connected;
 ```
 
+### Probe template sensors
+
+One template sensor per probe exposes the temperature to Home Assistant. Adjust the count to match your device:
+
+```yaml
+  - platform: template
+    name: "iBBQ Probe 1"
+    id: probe_1
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+  # ... repeat for probe_2 through probe_6
+```
+
 ## Notes
 
 - Requires `esp-idf` framework (not Arduino) for reliable BLE client support
-- If using `bluetooth_proxy`, set `esp32_ble: max_connections: 4` or higher
-- The 2s delay after connect is needed to avoid a race condition with service discovery
-- Disconnected probes report values >= 60000 (typically `0xFFF6`), which are filtered to NAN
+- The 2s delay after connect avoids a race condition where the write fires before the GATT client is fully ready
+- The iBBQ only advertises when not connected to another device -- close the Inkbird phone app before testing
 
 ## Acknowledgements
 
