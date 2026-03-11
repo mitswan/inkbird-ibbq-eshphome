@@ -2,6 +2,8 @@
 
 Pure ESPHome YAML config for Inkbird iBBQ Bluetooth thermometers (tested with IBT-6XS). No custom components needed.
 
+**[Jump straight to the code](ibbq-esphome.yaml)**
+
 Uses ESPHome's built-in `ble_client` to connect via GATT, authenticate, and subscribe to realtime temperature notifications.
 
 ## How it works
