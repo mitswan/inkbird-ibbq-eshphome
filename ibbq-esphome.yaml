@@ -1,13 +1,14 @@
 # Inkbird iBBQ thermometer integration for ESPHome
-# Tested with IBT-6XS (should work with other iBBQ models)
+# Tested with IBT-6XS and IBT-2X (should work with other iBBQ models)
 #
-# Replace YOUR_IBBQ_MAC_ADDRESS with the MAC address of your iBBQ device.
-# You can find it by enabling the ble_scanner text sensor below.
+# Replace MAC addresses below with your own.
+# You can find them by enabling the ble_scanner text sensor below.
 
 # Ensure your ESP32 has enough BLE connection slots.
-# If you use bluetooth_proxy, you'll need more (e.g. 4).
+# Each ble_client needs one slot, plus bluetooth_proxy needs 3.
+# e.g. 2 iBBQ devices + bluetooth_proxy = max_connections: 5
 esp32_ble:
-  max_connections: 4
+  max_connections: 5
 
 esp32_ble_tracker:
   scan_parameters:
@@ -21,64 +22,92 @@ esp32_ble_tracker:
 #     name: "BLE Devices Scanner"
 
 ble_client:
-  - mac_address: "YOUR_IBBQ_MAC_ADDRESS"
-    id: ibbq_client
+  # --- IBT-6XS (6 probes) ---
+  - mac_address: "YOUR_IBT6XS_MAC_ADDRESS"
+    id: ibt6xs_client
     on_connect:
       then:
         - delay: 2s
         # iBBQ pairing: 15-byte key to FFF2 (AccountAndVerify)
         - ble_client.ble_write:
-            id: ibbq_client
+            id: ibt6xs_client
             service_uuid: "FFF0"
             characteristic_uuid: "FFF2"
             value: [0x21, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0xb8, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00]
         - delay: 500ms
         # Enable realtime data on FFF5 (SettingsData)
         - ble_client.ble_write:
-            id: ibbq_client
+            id: ibt6xs_client
             service_uuid: "FFF0"
             characteristic_uuid: "FFF5"
             value: [0x0B, 0x01, 0x00, 0x00, 0x00, 0x00]
         - delay: 500ms
         # Set units to Celsius on FFF5 (SettingsData)
         - ble_client.ble_write:
-            id: ibbq_client
+            id: ibt6xs_client
             service_uuid: "FFF0"
             characteristic_uuid: "FFF5"
             value: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00]
     on_disconnect:
       then:
         - lambda: |-
-            ESP_LOGD("ibbq", "Disconnected!");
-            id(probe_1).publish_state(NAN);
-            id(probe_2).publish_state(NAN);
-            id(probe_3).publish_state(NAN);
-            id(probe_4).publish_state(NAN);
-            id(probe_5).publish_state(NAN);
-            id(probe_6).publish_state(NAN);
+            ESP_LOGD("ibbq", "IBT-6XS Disconnected!");
+            id(ibt6xs_probe_1).publish_state(NAN);
+            id(ibt6xs_probe_2).publish_state(NAN);
+            id(ibt6xs_probe_3).publish_state(NAN);
+            id(ibt6xs_probe_4).publish_state(NAN);
+            id(ibt6xs_probe_5).publish_state(NAN);
+            id(ibt6xs_probe_6).publish_state(NAN);
+
+  # --- IBT-2X (2 probes) ---
+  - mac_address: "YOUR_IBT2X_MAC_ADDRESS"
+    id: ibt2x_client
+    on_connect:
+      then:
+        - delay: 2s
+        - ble_client.ble_write:
+            id: ibt2x_client
+            service_uuid: "FFF0"
+            characteristic_uuid: "FFF2"
+            value: [0x21, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0xb8, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00]
+        - delay: 500ms
+        - ble_client.ble_write:
+            id: ibt2x_client
+            service_uuid: "FFF0"
+            characteristic_uuid: "FFF5"
+            value: [0x0B, 0x01, 0x00, 0x00, 0x00, 0x00]
+        - delay: 500ms
+        - ble_client.ble_write:
+            id: ibt2x_client
+            service_uuid: "FFF0"
+            characteristic_uuid: "FFF5"
+            value: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00]
+    on_disconnect:
+      then:
+        - lambda: |-
+            ESP_LOGD("ibbq", "IBT-2X Disconnected!");
+            id(ibt2x_probe_1).publish_state(NAN);
+            id(ibt2x_probe_2).publish_state(NAN);
 
 sensor:
-  # BLE notify listener on FFF4 (RealtimeData) - parses temperature notifications
+  # --- IBT-6XS data listener ---
   - platform: ble_client
     type: characteristic
-    ble_client_id: ibbq_client
+    ble_client_id: ibt6xs_client
     service_uuid: "FFF0"
     characteristic_uuid: "FFF4"
     notify: true
     update_interval: never
-    id: ibbq_data_listener
+    id: ibt6xs_data_listener
     internal: true
     lambda: |-
       if (x.size() < 2) return 0;
-
       int num_probes = x.size() / 2;
       if (num_probes > 6) num_probes = 6;
-
       sensor::Sensor *sensors[] = {
-        id(probe_1), id(probe_2), id(probe_3),
-        id(probe_4), id(probe_5), id(probe_6)
+        id(ibt6xs_probe_1), id(ibt6xs_probe_2), id(ibt6xs_probe_3),
+        id(ibt6xs_probe_4), id(ibt6xs_probe_5), id(ibt6xs_probe_6)
       };
-
       int probes_connected = 0;
       for (int i = 0; i < num_probes; i++) {
         uint16_t raw = x[i*2] | (x[i*2+1] << 8);
@@ -89,56 +118,99 @@ sensor:
           sensors[i]->publish_state(NAN);
         }
       }
-      // Clear any remaining probes not reported
       for (int i = num_probes; i < 6; i++) {
         sensors[i]->publish_state(NAN);
       }
       return probes_connected;
 
-  # Template sensors for each probe (adjust count to match your device)
+  # --- IBT-2X data listener ---
+  - platform: ble_client
+    type: characteristic
+    ble_client_id: ibt2x_client
+    service_uuid: "FFF0"
+    characteristic_uuid: "FFF4"
+    notify: true
+    update_interval: never
+    id: ibt2x_data_listener
+    internal: true
+    lambda: |-
+      if (x.size() < 2) return 0;
+      int num_probes = x.size() / 2;
+      if (num_probes > 2) num_probes = 2;
+      sensor::Sensor *sensors[] = { id(ibt2x_probe_1), id(ibt2x_probe_2) };
+      int probes_connected = 0;
+      for (int i = 0; i < num_probes; i++) {
+        uint16_t raw = x[i*2] | (x[i*2+1] << 8);
+        if (raw > 0 && raw < 60000) {
+          sensors[i]->publish_state(raw / 10.0);
+          probes_connected++;
+        } else {
+          sensors[i]->publish_state(NAN);
+        }
+      }
+      return probes_connected;
+
+  # --- IBT-6XS probe sensors ---
   - platform: template
-    name: "iBBQ Probe 1"
-    id: probe_1
+    name: "IBT-6XS Probe 1"
+    id: ibt6xs_probe_1
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
 
   - platform: template
-    name: "iBBQ Probe 2"
-    id: probe_2
+    name: "IBT-6XS Probe 2"
+    id: ibt6xs_probe_2
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
 
   - platform: template
-    name: "iBBQ Probe 3"
-    id: probe_3
+    name: "IBT-6XS Probe 3"
+    id: ibt6xs_probe_3
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
 
   - platform: template
-    name: "iBBQ Probe 4"
-    id: probe_4
+    name: "IBT-6XS Probe 4"
+    id: ibt6xs_probe_4
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
 
   - platform: template
-    name: "iBBQ Probe 5"
-    id: probe_5
+    name: "IBT-6XS Probe 5"
+    id: ibt6xs_probe_5
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 1
 
   - platform: template
-    name: "iBBQ Probe 6"
-    id: probe_6
+    name: "IBT-6XS Probe 6"
+    id: ibt6xs_probe_6
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  # --- IBT-2X probe sensors ---
+  - platform: template
+    name: "IBT-2X Probe 1"
+    id: ibt2x_probe_1
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "IBT-2X Probe 2"
+    id: ibt2x_probe_2
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
